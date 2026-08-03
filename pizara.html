@@ -1,0 +1,211 @@
+import os
+
+# Actualización de Pizarra_Local.html para mayor compatibilidad con carga local
+whiteboard_html_content = """
+<!DOCTYPE html>
+<html lang='es'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>Pizarra Pro v3.5.2 - Compatible</title>
+    <!-- Usamos CDN con integridad para evitar problemas de carga local si el archivo no existe -->
+    <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css'>
+    <script defer src='https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js'></script>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; background: #f0f2f5; }
+        #latex-sidebar { width: 70px; background: #2c3e50; display: flex; flex-direction: column; align-items: center; padding-top: 60px; gap: 8px; z-index: 1000; overflow-y: auto; color: white; border-right: 2px solid #1a252f; }
+        .latex-sym { width: 45px; height: 45px; background: #34495e; border: 1px solid #455a64; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 20px; transition: 0.2s; user-select: none; }
+        .latex-sym:hover { background: #2196F3; transform: scale(1.05); }
+        #toolbar { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); background: white; padding: 10px 25px; border-radius: 50px; box-shadow: 0 5px 25px rgba(0,0,0,0.2); display: flex; gap: 10px; z-index: 1100; align-items: center; }
+        .canvas-container { position: relative; flex-grow: 1; height: 100vh; background: white; overflow: hidden; }
+        #grid-layer { position: absolute; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+        #draw-layer { position: absolute; top: 0; left: 0; z-index: 5; pointer-events: none; }
+        #interaction-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; }
+        .btn { padding: 8px 15px; cursor: pointer; border: none; border-radius: 20px; background: #e9ecef; font-weight: 600; transition: 0.3s; display: flex; align-items: center; gap: 5px; }
+        .btn.active { background: #2196F3; color: white; }
+        .obj-item { position: absolute; cursor: move; z-index: 20; user-select: none; pointer-events: auto; outline: 2px solid transparent; }
+        .obj-item:hover { outline: 2px dashed #2196F3; }
+        .obj-item svg { display: block; pointer-events: none; }
+        .math-box { background: white; border: 1px solid #ccc; padding: 10px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); display: flex; flex-direction: column; gap: 5px; }
+        .separator { width: 1px; height: 30px; background: #ddd; margin: 0 5px; }
+        #bg-select { padding: 5px; border-radius: 10px; border: 1px solid #ccc; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<div id='latex-sidebar'>
+    <div class='latex-sym' title='Fracción' onclick="insertLatex('\\\\frac{a}{b}')">¼</div>
+    <div class='latex-sym' title='Raíz' onclick="insertLatex('\\\\sqrt{x}')">√</div>
+    <div class='latex-sym' title='Integral' onclick="insertLatex('\\\\int_{a}^{b}')">∫</div>
+    <div class='latex-sym' title='Sumatoria' onclick="insertLatex('\\\\sum')">Σ</div>
+    <div class='latex-sym' title='Pi' onclick="insertLatex('\\\\pi')">π</div>
+    <div class='latex-sym' title='Infinito' onclick="insertLatex('\\\\infty')">∞</div>
+</div>
+
+<div id='toolbar'>
+    <button class='btn active' id='drawBtn' onclick="setMode('draw')">✏️</button>
+    <button class='btn' id='eraserBtn' onclick="setMode('eraser')">🧽</button>
+    <button class='btn' id='moveBtn' onclick="setMode('move')">🖱️</button>
+    <button class='btn' id='objEraserBtn' onclick="setMode('objEraser')">🎯</button>
+    <div class='separator'></div>
+    <button class='btn' onclick="addText()">📝 Texto</button>
+    <button class='btn' onclick="addMath()">f(x)</button>
+    <button class='btn' onclick="document.getElementById('fileInput').click()">🖼️</button>
+    <input type='file' id='fileInput' hidden onchange="loadImage(event)">
+    <select id='bg-select' onchange="updateBackground(this.value)">
+        <option value='none'>Blanco</option>
+        <option value='grid'>Cuadrícula</option>
+        <option value='lines'>Renglones</option>
+    </select>
+    <input type='color' id='colorPicker' value='#FF0000'>
+</div>
+
+<div class='canvas-container' id='container'>
+    <canvas id='grid-layer'></canvas>
+    <canvas id='draw-layer'></canvas>
+    <div id='interaction-layer'></div>
+</div>
+
+<script>
+    const canvas = document.getElementById('draw-layer');
+    const ctx = canvas.getContext('2d');
+    const gridCanvas = document.getElementById('grid-layer');
+    const gridCtx = gridCanvas.getContext('2d');
+    const container = document.getElementById('interaction-layer');
+    const colorPicker = document.getElementById('colorPicker');
+
+    let mode = 'draw', isDrawing = false, currentPath = [];
+    let lastMathInput = null;
+
+    function resize() {
+        const w = window.innerWidth - 70;
+        const h = window.innerHeight;
+        canvas.width = gridCanvas.width = w;
+        canvas.height = gridCanvas.height = h;
+        updateBackground(document.getElementById('bg-select').value);
+    }
+    window.addEventListener('resize', resize); resize();
+
+    function updateBackground(type) {
+        gridCtx.clearRect(0, 0, gridCanvas.width, gridCanvas.height);
+        gridCtx.strokeStyle = '#e0e0e0';
+        if (type === 'grid') {
+            for(let x=0; x<gridCanvas.width; x+=30) { gridCtx.beginPath(); gridCtx.moveTo(x,0); gridCtx.lineTo(x,gridCanvas.height); gridCtx.stroke(); }
+            for(let y=0; y<gridCanvas.height; y+=30) { gridCtx.beginPath(); gridCtx.moveTo(0,y); gridCtx.lineTo(gridCanvas.width,y); gridCtx.stroke(); }
+        } else if (type === 'lines') {
+            for(let y=40; y<gridCanvas.height; y+=30) { gridCtx.beginPath(); gridCtx.moveTo(0,y); gridCtx.lineTo(gridCanvas.width,y); gridCtx.stroke(); }
+        }
+    }
+
+    function setMode(m) {
+        mode = m;
+        document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+        const btn = document.getElementById(m + 'Btn'); if(btn) btn.classList.add('active');
+    }
+
+    function insertLatex(sym) {
+        if(lastMathInput) { 
+            const start = lastMathInput.selectionStart;
+            const end = lastMathInput.selectionEnd;
+            lastMathInput.value = lastMathInput.value.substring(0, start) + sym + lastMathInput.value.substring(end);
+            lastMathInput.focus();
+        }
+    }
+
+    container.onmousedown = (e) => {
+        if((mode !== 'draw' && mode !== 'eraser') || e.target !== container) return;
+        isDrawing = true;
+        currentPath = [{x: e.clientX - 70, y: e.clientY}];
+    };
+
+    container.onmousemove = (e) => {
+        if(!isDrawing) return;
+        let x = e.clientX - 70, y = e.clientY;
+        currentPath.push({x, y});
+        ctx.globalCompositeOperation = mode === 'eraser' ? 'destination-out' : 'source-over';
+        ctx.lineWidth = mode === 'eraser' ? 30 : 3;
+        ctx.strokeStyle = colorPicker.value;
+        ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(currentPath[currentPath.length-2].x, currentPath[currentPath.length-2].y);
+        ctx.lineTo(x, y); ctx.stroke();
+    };
+
+    container.onmouseup = () => {
+        if(!isDrawing) return;
+        isDrawing = false;
+        if(mode === 'draw') finalizePath(currentPath);
+    };
+
+    function finalizePath(path) {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        const xs = path.map(p=>p.x), ys = path.map(p=>p.y);
+        const minX = Math.min(...xs), minY = Math.min(...ys);
+        svg.classList.add('obj-item');
+        svg.style.cssText = `left:${minX+70}px; top:${minY}px; width:${Math.max(...xs)-minX+5}px; height:${Math.max(...ys)-minY+5}px; overflow:visible;`;
+        poly.setAttribute('points', path.map(p=>`${p.x-minX+2},${p.y-minY+2}`).join(' '));
+        poly.setAttribute('stroke', colorPicker.value); poly.setAttribute('fill', 'none'); poly.setAttribute('stroke-width', '3');
+        svg.appendChild(poly); container.appendChild(svg); makeInteractable(svg);
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+    }
+
+    function makeInteractable(el) {
+        el.onmousedown = (e) => {
+            e.stopPropagation();
+            if(mode === 'objEraser') { el.remove(); return; }
+            if(mode === 'move') {
+                let ox = e.clientX - el.offsetLeft, oy = e.clientY - el.offsetTop;
+                const move = (ev) => {
+                    el.style.left = (ev.clientX - ox)+'px';
+                    el.style.top = (ev.clientY - oy)+'px';
+                };
+                document.onmousemove = move;
+                document.onmouseup = () => document.onmousemove = null;
+            }
+        };
+    }
+
+    function addText() {
+        const val = prompt("Texto:"); if(!val) return;
+        const div = document.createElement('div'); div.className = 'obj-item';
+        div.style.cssText = `left:200px; top:200px; color:${colorPicker.value}; font-size:24px; font-weight:bold; padding:5px;`;
+        div.innerText = val; container.appendChild(div); makeInteractable(div);
+    }
+
+    function addMath() {
+        const div = document.createElement('div'); div.className = 'obj-item math-box';
+        div.style.cssText = `left:250px; top:250px;`;
+        const input = document.createElement('textarea'); 
+        input.placeholder = "Escribe LaTeX...";
+        input.style.width = '200px';
+        input.onfocus = () => lastMathInput = input;
+        const display = document.createElement('div');
+        const btn = document.createElement('button'); btn.innerText = "Renderizar";
+        btn.onclick = () => {
+            try {
+                window.katex.render(input.value, display, { throwOnError: false });
+                input.style.display = 'none'; btn.style.display = 'none';
+            } catch(e) { alert('Error en LaTeX'); }
+        };
+        div.append(input, btn, display); container.appendChild(div); makeInteractable(div); input.focus();
+    }
+
+    function loadImage(e) {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            const img = document.createElement('img'); img.src = ev.target.result;
+            img.className = 'obj-item'; img.style.cssText = "left:100px; top:100px; max-width:500px; border:1px solid #ddd;";
+            container.appendChild(img); makeInteractable(img);
+        };
+        reader.readAsDataURL(e.target.files[0]);
+    }
+</script>
+</body>
+</html>
+"""
+
+with open('Pizarra_Local.html', 'w', encoding='utf-8') as f:
+    f.write(whiteboard_html_content)
+
+print("Pizarra_Local.html v3.5.2 regenerada con mejoras de seguridad y carga.")
